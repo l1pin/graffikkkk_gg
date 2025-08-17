@@ -273,7 +273,7 @@ function openAnalyticsWebApp() {
     try {
         // URL вашего веб-приложения (замените на ваш реальный URL после развертывания)
         const webAppUrl =
-            "https://script.google.com/macros/s/AKfycbxExFx26-bi-mifd_75BXg6euym3BpYfZidAJ4tFJdPVLrReTXzmjk6acWd2RMb8DPCWQ/exec";
+            "https://script.google.com/macros/s/AKfycbxn54C-SGtaWrYPUfd1E7s0Ief2HFJ3cfShvRYfxJuEqZ1GM-7JQXYjTFT0Hk5VoVaGRA/exec";
 
         // Создаем HTML для открытия в новой вкладке
         const html = `
@@ -318,24 +318,26 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                 return value ? String(value).trim() : "";
             }
 
-            const strVal = String(value || "").replace(",", ".");
+            // Улучшенный парсинг: убираем пробелы, заменяем запятые на точки
+            const strVal = String(value || "").trim().replace(/\s+/g, "").replace(",", ".");
             const num = parseFloat(strVal);
             if (isNaN(num)) return value ? String(value) : "";
 
             switch (rowIndex) {
-                case 11: // Доля взаимодействий
-                case 12: // CTR
-                case 13: // CPM
-                case 14: // CPC
-                case 15: // Доля показов
+                case 11: // Доля взаимодействий - в %
+                case 12: // CTR - в %
+                case 15: // Доля показов - в %
+                case 19: // 25% видео - в %
+                case 20: // 50% видео - в %
+                case 21: // 75% видео - в %
+                case 22: // 100% видео - в %
+                    return num.toFixed(2).replace(".", ",") + "%";
+                case 13: // CPM - с плавающей точкой
+                case 14: // CPC - с плавающей точкой
                     return num.toFixed(2).replace(".", ",");
-                case 16: // Показы
-                case 17: // Просмотры
-                case 18: // Клики
-                case 19: // 25% видео
-                case 20: // 50% видео
-                case 21: // 75% видео
-                case 22: // 100% видео
+                case 16: // Показы - целые числа
+                case 17: // Просмотры - целые числа
+                case 18: // Клики - целые числа
                     return String(Math.floor(num));
                 default:
                     return num.toFixed(2).replace(".", ",");
@@ -564,16 +566,44 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                     }
                 }
 
+                // ПРОВЕРКА 1: Артикул существует
+                if (!articleRow) {
+                    console.log("❌ Article not found in КАПЫ 3.0");
+                    throw new Error(
+                        `📝 Неверный артикул!\n\nАртикул "${article}" не найден в системе.\n\nПроверьте правильность написания артикула.`
+                    );
+                }
+
+                // ПРОВЕРКА 2: Разрешение на просмотр (колонка BQ = столбец 69)
+                const permissionValue = sheetKapy.getRange(articleRow, 69).getValue();
+                console.log("🔐 Checking permission for article:", article, "Permission value:", permissionValue);
+                
+                if (permissionValue !== 1 && permissionValue !== "1") {
+                    console.log("❌ No permission to view article:", article);
+                    throw new Error(
+                        `🔒 Нет разрешения на просмотр!\n\nДоступ к артикулу "${article}" ограничен.\n\nОбратитесь к администратору для получения разрешения.`
+                    );
+                }
+
+                console.log("✅ Article found and permission granted:", article);
+
                 if (articleRow) {
                     console.log("✅ Found article in КАПЫ 3.0 at row:", articleRow);
                     const rawAB = sheetKapy.getRange(articleRow, 28).getValue();
                     const rawAF = sheetKapy.getRange(articleRow, 32).getValue();
-                    maxCPLThreshold =
-                        rawAB !== "" && !isNaN(rawAB)
-                            ? Number(rawAB)
-                            : rawAF !== "" && !isNaN(rawAF)
-                                ? Number(rawAF)
-                                : 3.5;
+                    
+                    // Проверяем AB (колонка 28) - приоритет
+                    if (rawAB !== null && rawAB !== undefined && rawAB !== "" && !isNaN(rawAB) && Number(rawAB) > 0) {
+                        maxCPLThreshold = Number(rawAB);
+                    }
+                    // Если AB пустая, проверяем AF (колонка 32)
+                    else if (rawAF !== null && rawAF !== undefined && rawAF !== "" && !isNaN(rawAF) && Number(rawAF) > 0) {
+                        maxCPLThreshold = Number(rawAF);
+                    }
+                    // Если обе пустые - константа 3.5
+                    else {
+                        maxCPLThreshold = 3.5;
+                    }
 
                     status = String(
                         sheetKapy.getRange(articleRow, 4).getValue() || "Активный"
@@ -670,14 +700,20 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                         backgroundColor: zoneBackgroundColor || "#f3f3f3",
                         fontColor: zoneFontColor || "#666666",
                     };
-                } else {
-                    console.log("⚠️ Article not found in КАПЫ 3.0");
                 }
             } else {
                 console.log("⚠️ КАПЫ 3.0 sheet not found");
             }
         } catch (e) {
             console.log("❌ Ошибка при получении данных из КАПЫ 3.0:", e);
+            // Если это уже наша пользовательская ошибка, перебрасываем как есть
+            if (e.message && (e.message.includes("📋") || e.message.includes("🔒") || e.message.includes("📝"))) {
+                throw e;
+            }
+            // Для всех остальных ошибок
+            throw new Error(
+                `📋 Ошибка доступа к базе данных!\n\nТехническая информация: ${e.message}\n\nОбратитесь к администратору.`
+            );
         }
 
         const displayMaxCPL = maxCPLThreshold;
@@ -835,14 +871,14 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                         );
                     }
 
-                    // Создаем маппинг от adv_group_id к buyer info (с названием группы)
-                    if (groupId && groupName) {
+                    // Создаем маппинг от adv_group_id к buyer info (с ID группы)
+                    if (groupId) {
                         adGroupToBuyerMap[groupId] = {
                             ...campaignInfo,
-                            groupName: groupName,
+                            groupId: groupId,
                         };
                         console.log(
-                            `🔗 Mapped group_id "${groupId}" (${groupName}) to buyer "${campaignInfo.buyer}"`
+                            `🔗 Mapped group_id "${groupId}" to buyer "${campaignInfo.buyer}"`
                         );
                     }
                 }
@@ -983,21 +1019,21 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                 }
 
                 // По группам объявлений
-                if (groupName) {
-                    if (!resultMapByGroup[groupName]) resultMapByGroup[groupName] = {};
-                    if (!resultMapByGroup[groupName][dateStr])
-                        resultMapByGroup[groupName][dateStr] = { leads: 0, spend: 0 };
-                    resultMapByGroup[groupName][dateStr].leads += leads;
-                    resultMapByGroup[groupName][dateStr].spend += spend;
-                    globalGroups.add(groupName);
+                if (groupId) {
+                    if (!resultMapByGroup[groupId]) resultMapByGroup[groupId] = {};
+                    if (!resultMapByGroup[groupId][dateStr])
+                        resultMapByGroup[groupId][dateStr] = { leads: 0, spend: 0 };
+                    resultMapByGroup[groupId][dateStr].leads += leads;
+                    resultMapByGroup[groupId][dateStr].spend += spend;
+                    globalGroups.add(groupId);
 
                     if (!groupsByDate[dateStr]) groupsByDate[dateStr] = [];
-                    groupsByDate[dateStr].push(groupName);
+                    groupsByDate[dateStr].push(groupId);
                 }
 
                 // НОВАЯ СТРУКТУРА: Байер → Группа объявлений
-                if (buyerInfo.buyer && groupName) {
-                    const buyerGroupKey = `${buyerInfo.buyer}:::${groupName}`;
+                if (buyerInfo.buyer && groupId) {
+                    const buyerGroupKey = `${buyerInfo.buyer}:::${groupId}`;
                     if (!resultMapByBuyerGroup[buyerGroupKey])
                         resultMapByBuyerGroup[buyerGroupKey] = {};
                     if (!resultMapByBuyerGroup[buyerGroupKey][dateStr])
@@ -1011,11 +1047,14 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                     // Отслеживаем группы для каждого байера
                     if (!buyerGroupsMap[buyerInfo.buyer])
                         buyerGroupsMap[buyerInfo.buyer] = new Set();
-                    buyerGroupsMap[buyerInfo.buyer].add(groupName);
+                    buyerGroupsMap[buyerInfo.buyer].add(groupId);
                 }
 
-                totalLeadsAll += leads;
-                totalClicksAll += siteClicks;
+                // Учитываем день для CR только если есть данные о кликах
+                if (hasMetrics && siteClicks > 0) {
+                    totalLeadsAll += leads;
+                    totalClicksAll += siteClicks;
+                }
 
                 if (!minDate || dateObj < minDate) minDate = dateObj;
                 if (!maxDate || dateObj > maxDate) maxDate = dateObj;
@@ -1114,14 +1153,14 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                 }
 
                 // ПО ГРУППАМ ОБЪЯВЛЕНИЙ
-                if (groupName) {
-                    if (!fbDataMapByGroup[groupName]) fbDataMapByGroup[groupName] = {};
-                    addGoogleMetrics(fbDataMapByGroup[groupName], dateStr);
+                if (groupId) {
+                    if (!fbDataMapByGroup[groupId]) fbDataMapByGroup[groupId] = {};
+                    addGoogleMetrics(fbDataMapByGroup[groupId], dateStr);
                 }
 
                 // БАЙЕР → ГРУППА ОБЪЯВЛЕНИЙ
-                if (buyerInfo.buyer && groupName) {
-                    const buyerGroupKey = `${buyerInfo.buyer}:::${groupName}`;
+                if (buyerInfo.buyer && groupId) {
+                    const buyerGroupKey = `${buyerInfo.buyer}:::${groupId}`;
                     if (!fbDataMapByBuyerGroup[buyerGroupKey])
                         fbDataMapByBuyerGroup[buyerGroupKey] = {};
                     addGoogleMetrics(fbDataMapByBuyerGroup[buyerGroupKey], dateStr);
@@ -1279,33 +1318,35 @@ function buildChartForArticle(article, periodStart, periodEnd) {
             }
 
             const segmentData = {
-                dates: [],
-                ratings: [],
-                cplDay: [],
-                leadsDay: [],
-                spendDay: [],
-                conversionDay: [],
-                maxCPL: [],
-                cplCumulative: [],
-                cplCumulativeColors: [],
-                cplCumulativeArrows: [],
-                groups: [],
-                engagementRate: [],
-                ctr: [],
-                cpm: [],
-                cpc: [],
-                engagementView: [],
-                showed: [],
-                viewed: [],
-                linkClicks: [],
-                videoStart: [],
-                videoHalf: [],
-                videoAlmost: [],
-                videoFull: [],
-                videoName: [],
-                siteUrl: [],
-                trackTemplate: [],
-            };
+    dates: [],
+    ratings: [],
+    cplDay: [],
+    leadsDay: [],
+    spendDay: [],
+    conversionDay: [],
+    maxCPL: [],
+    cplCumulative: [],
+    cplCumulativeColors: [],
+    cplCumulativeArrows: [],
+    groups: [],
+    engagementRate: [],
+    ctr: [],
+    cpm: [],
+    cpc: [],
+    engagementView: [],
+    showed: [],
+    viewed: [],
+    linkClicks: [],
+    videoStart: [],
+    videoHalf: [],
+    videoAlmost: [],
+    videoFull: [],
+    videoName: [],
+    siteUrl: [],
+    trackTemplate: [],
+    freq: [],
+    avgWatchTime: []
+};
 
             let activeDaysSegment = 0,
                 daysInNormSegment = 0,
@@ -1358,14 +1399,21 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                         segmentData.groups.push("");
                     }
 
-                    segmentData.freq.push("");
+                    segmentData.engagementRate.push("");
                     segmentData.ctr.push("");
                     segmentData.cpm.push("");
-                    segmentData.linkClicks.push("");
                     segmentData.cpc.push("");
-                    segmentData.avgWatchTime.push("");
+                    segmentData.engagementView.push("");
+                    segmentData.showed.push("");
+                    segmentData.viewed.push("");
+                    segmentData.linkClicks.push("");
+                    segmentData.videoStart.push("");
+                    segmentData.videoHalf.push("");
+                    segmentData.videoAlmost.push("");
+                    segmentData.videoFull.push("");
                     segmentData.videoName.push("");
                     segmentData.siteUrl.push("");
+                    segmentData.trackTemplate.push("");
 
                     aggCostSegment = 0;
                     aggLeadsSegment = 0;
@@ -1376,18 +1424,19 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                     continue;
                 }
 
-                let segmentDayConversion = 0;
+                let segmentDayConversionText = "--";
                 if (fbDataSegment.linkClicks && dayLeads > 0) {
                     const segmentDayClicks = sumMultilineValues(fbDataSegment.linkClicks);
                     if (segmentDayClicks > 0) {
-                        segmentDayConversion = (dayLeads / segmentDayClicks) * 100;
+                        const segmentDayConversion = (dayLeads / segmentDayClicks) * 100;
+                        segmentDayConversionText = segmentDayConversion.toFixed(2) + "%";
                     }
                 }
 
                 segmentData.cplDay.push(dayCpl);
                 segmentData.leadsDay.push(dayLeads);
                 segmentData.spendDay.push(daySpend);
-                segmentData.conversionDay.push(segmentDayConversion.toFixed(2) + "%");
+                segmentData.conversionDay.push(segmentDayConversionText);
                 segmentData.maxCPL.push(displayMaxCPL);
 
                 // Группы для байера
@@ -1445,8 +1494,11 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                     }
                 });
 
-                segmentLeads += dayLeads;
-                segmentClicks += sumMultilineValues(fbDataSegment.linkClicks || []);
+                const dayClicksForCR = sumMultilineValues(fbDataSegment.linkClicks || []);
+                if (dayClicksForCR > 0) {
+                    segmentLeads += dayLeads;
+                    segmentClicks += dayClicksForCR;
+                }
 
                 let rating;
                 if (dayLeads === 0 && daySpend > 0) {
@@ -1496,28 +1548,37 @@ function buildChartForArticle(article, periodStart, periodEnd) {
 
             // Создаем новые массивы с диапазонами для сегмента
             const newSegmentData = {
-                dates: [],
-                ratings: [],
-                cplDay: [],
-                leadsDay: [],
-                spendDay: [],
-                conversionDay: [],
-                maxCPL: [],
-                cplCumulative: [],
-                cplCumulativeColors: [],
-                cplCumulativeArrows: [],
-                groups: [],
-                freq: [],
-                ctr: [],
-                cpm: [],
-                linkClicks: [],
-                cpc: [],
-                avgWatchTime: [],
-                videoName: [],
-                siteUrl: [],
-                columnSpans: [],
-                columnClasses: [],
-            };
+    dates: [],
+    ratings: [],
+    cplDay: [],
+    leadsDay: [],
+    spendDay: [],
+    conversionDay: [],
+    maxCPL: [],
+    cplCumulative: [],
+    cplCumulativeColors: [],
+    cplCumulativeArrows: [],
+    groups: [],
+    engagementRate: [],
+    ctr: [],
+    cpm: [],
+    cpc: [],
+    engagementView: [],
+    showed: [],
+    viewed: [],
+    linkClicks: [],
+    videoStart: [],
+    videoHalf: [],
+    videoAlmost: [],
+    videoFull: [],
+    videoName: [],
+    siteUrl: [],
+    trackTemplate: [],
+    columnSpans: [],
+    columnClasses: [],
+    freq: [],
+    avgWatchTime: []
+};
 
             segmentDateRanges.forEach((range) => {
                 if (range.isZeroRange && range.startIndex !== range.endIndex) {
@@ -1611,6 +1672,8 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                     cr: segmentCR.toFixed(2).replace(".", ",") + "%",
                     videos: segmentVideos.size,
                     sites: segmentSites.size,
+                    videoNames: Array.from(segmentVideos).join('\n') || 'Нет данных',
+                    siteUrls: Array.from(segmentSites).join('\n') || 'Нет данных',
                 },
             };
         }
@@ -1664,46 +1727,50 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                 return startDate;
             }
 
-            const startShort = startDate.substring(0, 5);
-            const endShort = endDate.substring(0, 5);
+            // Вычисляем количество дней в диапазоне
+            const start = new Date(startDate.split('.').reverse().join('-'));
+            const end = new Date(endDate.split('.').reverse().join('-'));
+            const daysDiff = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
 
-            return `${startShort}-${endShort}`;
+            return `${daysDiff} д.`;
         }
 
         // Подготовка данных для общей таблицы
         console.log("📊 Building general data...");
         const generalData = {
-            dates: [],
-            ratings: [],
-            cplDay: [],
-            leadsDay: [],
-            spendDay: [],
-            conversionDay: [],
-            maxCPL: [],
-            cplCumulative: [],
-            cplCumulativeColors: [],
-            cplCumulativeArrows: [],
-            groups: [],
-            buyers: [],
-            accounts: [],
-            engagementRate: [],
-            ctr: [],
-            cpm: [],
-            cpc: [],
-            engagementView: [],
-            showed: [],
-            viewed: [],
-            linkClicks: [],
-            videoStart: [],
-            videoHalf: [],
-            videoAlmost: [],
-            videoFull: [],
-            videoName: [],
-            siteUrl: [],
-            trackTemplate: [],
-            columnSpans: [],
-            columnClasses: [],
-        };
+    dates: [],
+    ratings: [],
+    cplDay: [],
+    leadsDay: [],
+    spendDay: [],
+    conversionDay: [],
+    maxCPL: [],
+    cplCumulative: [],
+    cplCumulativeColors: [],
+    cplCumulativeArrows: [],
+    groups: [],
+    buyers: [],
+    accounts: [],
+    engagementRate: [],
+    ctr: [],
+    cpm: [],
+    cpc: [],
+    engagementView: [],
+    showed: [],
+    viewed: [],
+    linkClicks: [],
+    videoStart: [],
+    videoHalf: [],
+    videoAlmost: [],
+    videoFull: [],
+    videoName: [],
+    siteUrl: [],
+    trackTemplate: [],
+    columnSpans: [],
+    columnClasses: [],
+    freq: [],
+    avgWatchTime: []
+};
         let activeDays = 0,
             daysInNorm = 0,
             daysBelowAllowed = 0;
@@ -1734,14 +1801,21 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                 generalData.accounts.push("");
                 generalData.ratings.push("");
 
-                generalData.freq.push("");
+                generalData.engagementRate.push("");
                 generalData.ctr.push("");
                 generalData.cpm.push("");
-                generalData.linkClicks.push("");
                 generalData.cpc.push("");
-                generalData.avgWatchTime.push("");
+                generalData.engagementView.push("");
+                generalData.showed.push("");
+                generalData.viewed.push("");
+                generalData.linkClicks.push("");
+                generalData.videoStart.push("");
+                generalData.videoHalf.push("");
+                generalData.videoAlmost.push("");
+                generalData.videoFull.push("");
                 generalData.videoName.push("");
                 generalData.siteUrl.push("");
+                generalData.trackTemplate.push("");
 
                 aggCost = 0;
                 aggLeads = 0;
@@ -1754,18 +1828,19 @@ function buildChartForArticle(article, periodStart, periodEnd) {
 
             const dayCpl = dayLeads > 0 ? daySpend / dayLeads : 0;
 
-            let dayConversion = 0;
+            let dayConversionText = "--";
             if (fbDataMap[dateKey] && fbDataMap[dateKey].linkClicks && dayLeads > 0) {
                 const dayClicks = sumMultilineValues(fbDataMap[dateKey].linkClicks);
                 if (dayClicks > 0) {
-                    dayConversion = (dayLeads / dayClicks) * 100;
+                    const dayConversion = (dayLeads / dayClicks) * 100;
+                    dayConversionText = dayConversion.toFixed(2) + "%";
                 }
             }
 
             generalData.cplDay.push(dayCpl);
             generalData.leadsDay.push(dayLeads);
             generalData.spendDay.push(daySpend);
-            generalData.conversionDay.push(dayConversion.toFixed(2) + "%");
+            generalData.conversionDay.push(dayConversionText);
             generalData.maxCPL.push(displayMaxCPL);
 
             // Получаем данные дня
@@ -1915,30 +1990,39 @@ function buildChartForArticle(article, periodStart, periodEnd) {
 
         // Создаем новые массивы с диапазонами
         const newGeneralData = {
-            dates: [],
-            ratings: [],
-            cplDay: [],
-            leadsDay: [],
-            spendDay: [],
-            conversionDay: [],
-            maxCPL: [],
-            cplCumulative: [],
-            cplCumulativeColors: [],
-            cplCumulativeArrows: [],
-            groups: [],
-            buyers: [],
-            accounts: [],
-            freq: [],
-            ctr: [],
-            cpm: [],
-            linkClicks: [],
-            cpc: [],
-            avgWatchTime: [],
-            videoName: [],
-            siteUrl: [],
-            columnSpans: [],
-            columnClasses: [],
-        };
+    dates: [],
+    ratings: [],
+    cplDay: [],
+    leadsDay: [],
+    spendDay: [],
+    conversionDay: [],
+    maxCPL: [],
+    cplCumulative: [],
+    cplCumulativeColors: [],
+    cplCumulativeArrows: [],
+    groups: [],
+    buyers: [],
+    accounts: [],
+    engagementRate: [],
+    ctr: [],
+    cpm: [],
+    cpc: [],
+    engagementView: [],
+    showed: [],
+    viewed: [],
+    linkClicks: [],
+    videoStart: [],
+    videoHalf: [],
+    videoAlmost: [],
+    videoFull: [],
+    videoName: [],
+    siteUrl: [],
+    trackTemplate: [],
+    columnSpans: [],
+    columnClasses: [],
+    freq: [],
+    avgWatchTime: []
+};
 
         dateRanges.forEach((range) => {
             if (range.isZeroRange && range.startIndex !== range.endIndex) {
@@ -2169,7 +2253,9 @@ function buildChartForArticle(article, periodStart, periodEnd) {
                 error.message.includes("🔌") ||
                 error.message.includes("🚨") ||
                 error.message.includes("🔧") ||
-                error.message.includes("📝"))
+                error.message.includes("📝") ||
+                error.message.includes("📋") ||
+                error.message.includes("🔒"))
         ) {
             console.log("🔥 Перебрасываем пользовательскую ошибку");
             throw error;
